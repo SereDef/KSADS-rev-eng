@@ -5,28 +5,112 @@
 # ~ Set up ~ -------------------------------------------------------------------
 
 # devtools::install_github('SereDef/GenR.helpR')
-require('genR.helpR')
+library('genR.helpR')
 
-require(haven)
-require(rpart)
-require(rpart.plot)
+library(haven)
+library(rpart)
+library(rpart.plot)
+
+source('imputation_helpers.R')
 
 data_dir <- "\\\\store/department/genr/isi-store/Behaviour_and_Cognition/Focus_op_17/KSADS/KSADS_DataF17/Data cleaning KSADS_F17/Merging COMP and Castor datasets/Serena"
 
 # list.files(data_dir)
 
+data_filename <- 'final_dataset_KSADS_F17_cleaned_23022026noSUD.sav'
+
 # ~ Read ~ ---------------------------------------------------------------------
 
+data <- file.path(data_dir, data_filename) |> 
+  haven::read_sav()
+
+# ~ Explore & clean ~ ----------------------------------------------------------
+
+# Variable types:
+
+# 1. General assessment variables
+general_vars <- c("Rnummer_corrected",                                     
+              "KSADS_Child17_Datasource_cleaned",                     
+              "KSADS_Child17_ID_cleaned",                     
+              "KSADS_Child17_DateofInterview_year_cleaned",          
+              "KSADS_Child17_DateofInterview_month_cleaned")
+
+summary(data[general_vars])
+head(data[general_vars], 3)
+
+table(data$KSADS_Child17_Datasource_cleaned, useNA='ifany') # TODO: ID missing ?   
+
+# 2. Raw item scores (for all participants), can be recognized by numeric item IDcode; 
+# i.e. var name format such as KSADS_Child17_0.0.0.Q3_cleaned. Tips for reading the KSADS question IDs:
+#   	The first number tells you whether the item was part of the screener (1) or supplement (2). 
+# E.g.: 1.1 is a depressive disorders screener item, 2.1 is a depressive disorder supplement item
+# 	The second number represents the module (see list below)
+# 	The third number reflects the symptom/topic the question relates to. (e.g. anhedonia)
+# 	The number after “Q..” is sub question-specific. (often Q1 = present, Q2 = past)
+
+raw_items  <- grep('^KSADS_Child17_[0-9]+', names(data), value=TRUE)
+
+symptoms <- grep('^KSADS_Child17_S[0-9]', names(data), value=TRUE) #TODO: missing??
+
+diagnoses <- grep('^KSADS_Child17_D[0-9]', names(data), value=TRUE)
+
+# meaningful na?
+# if screener is missing that is an accident 
+
+
+# 3. Symptom variables (COMP participants only). Computed by KSADS-COMP algorithm, 
+#    thus far unaltered us. Can be recognized by letter S in variable name.
+#     * Note, we recently found out that sometimes, these variables include odd categories with n=1.
+#       As discussed before, in such cases you can collapse all non-0 levels into 1 (so that we have 
+#       two levels only: 0=No and 1=Yes).
+
+# 4. Diagnosis variables (COMP participants only). 
+#     * Computed by KSADS-COMP algorithm, thus far unaltered by us. 
+#       Can be recognized by letter D in variable name. E.g. KSADS_Child17_D1
+#     * Aggregate diagnosis variables. Made by us by collapsing a few diagnosis 
+#       variables into one category. Var names include disorder class description 
+#       (e.g. KSADS_Child17_Depressive_disorders_1)
+
+# o	All modules (except for the SUD modules, that will follow in an updated dataset later this year).
+# 	KSADS modules can be recognized based on their module number, which is always the second number in the variable name (e.g. KSADS_Child17_0.0.0.Q3_cleaned = item from introduction module)
+# 	Introduction module = 0
+# 	Depressive disorders module = 1
+# 	Bipolar disorders module = 2
+# 	Sleep problems module = 22
+# 	Suicidality module = 23
+# 	Psychotic disorders module = 4
+# 	Social anxiety = 8
+# 	Generalized anxiety = 10
+# 	ED module = 13
+# 	AUD module = 19
+# 	(Each module, with exception of sleep problems and introduction, consists of 
+# a screener (1) and supplement (2) -> first number in variable name shows if item 
+# is from screener or supplement) (e.g. KSADS_Child17_1.1.1.Q1_cleaned = screen item)
+
+
+# Completed the computer version
+comput <- data |>
+  dplyr::filter(KSADS_Child17_Datasource_cleaned == 1)
+
+# TODO: for some of these the raw items do not correspond to 
+# the symptoms (the raw score was corrected, the symptom should be recalculated)
+
+# Paper-and-pencil / Castor -> must be imputed 
+castor <- data |>
+  dplyr::filter(KSADS_Child17_Datasource_cleaned == 2)
 # Read data (one module at the time)
+module <- 'ED'
+
 # TODO: make sure module names are consistent
 
-comput <- file.path(data_dir, "Merge_items_diagnoses_COMP_ED module.sav") |> 
-  haven::read_sav()
-
-castor <- file.path(data_dir, "Castor_dataset_only_cleaned_ED module.sav") |>
-  haven::read_sav()
+# comput <- file.path(data_dir, 
+#                     paste0('Merge_items_diagnoses_COMP_', module, ' module.sav')) |> 
+#   haven::read_sav()
+# 
+# castor <- file.path(data_dir,
+#                     paste0('Castor_dataset_only_cleaned_', module, ' module.sav')) |>
+#   haven::read_sav()
   
-# ~ Explore & clean ~ ----------------------------------------------------------
 
 names(castor)
 names(comput)
@@ -70,6 +154,14 @@ comput$KSADS_Child17_DateofInterview_month_cleaned <- NULL
 # summary(comput)
 
 # TODO: All NAs are now interpreted as "meaningful"
+# all 1.soemthig are NA: did not do the screener
+screener_items <- grep('^KSADS_Child17_1.', names(comput), value = TRUE)
+did_not_complete_screener <- rowSums(is.na(comput[,screener_items])) == length(screener_items)
+comput[did_not_complete_screener, ] <- NULL
+
+# Check: in castor fill them with NA 
+
+
 # TODO: check Constant 5 NA??? in symptoms
 # Check there are no empty rows
 # any(rowSums(is.na(comput)) == ncol(comput))
@@ -82,39 +174,22 @@ comput$KSADS_Child17_DateofInterview_month_cleaned <- NULL
 # TODO: ensure there are no "labelled" and other SPSS bs in the dataset 
 # factors are factors and numbers are numeric!
 
-# data <- clean_spss_bs(comput) # TODO: eh.. some labels are used as notes??
-
 data <- factorize(comput, min_levels = 3) # consider only yes / no
 
-# Ok porca troia: i cannot even 
-labs <- lapply(data, attr, 'label')
+# ~~~~~~~~ TMP: MANUAL FIXES ~~~~~~~~~~~~~~~~~
 
-data[] <- lapply(seq_along(data), function(i) {
-  c <- data[[i]]
-  
-  nc <- if(haven::is.labelled(c)) as.numeric(c) else c
-  
-  attr(nc, 'label') <- labs[[i]]
-  return(nc)
-})
+# TODO: ensure labels used are correct!
+# Some "labelled" have too many levels, treat them as numeric
+data <- numericize(data, to_factor = TRUE)
+
+# Some have odd labels that *I think* should be turned to Yes - No
+data <- force_binary(data, paste0('KSADS_Child17_S2', c(36, 38, 41)))
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 
 
 data_overview(data)
 
 summary(data)
-
-# TODO: ensure labels used are correct!
-# Some "labelled" have too many levels! what do to... TMP: do not compute for now
-
-# KSADS_Child17_S241 is still weird omg
-# TMP: MANUAL FIXES ~~~~~~~~~~~~~~~~~
-# problem_symptoms <- paste0('KSADS_Child17_S2', c(26, 27, 36, 37, 38, 39, 40, 41, 42))
-# 
-# for (s in problem_symptoms) {
-#   data[, s] <- as.factor(ifelse(data[,s] == 0, 'No', 'Yes'))
-#   
-# }
-
-#summary(data)
 
 # ~ Prediction ~ ---------------------------------------------------------------
 
@@ -122,13 +197,11 @@ items <- grep('KSADS_Child17_[0-9+]', names(data), value = TRUE)
 symptoms <- grep('KSADS_Child17_S[0-9+]', names(data), value = TRUE)
 diagnoses <- grep('KSADS_Child17_D[0-9+]', names(data), value = TRUE)
 
-# Making no variables are missing
-if ((length(items) + length(symptoms) + length(diagnoses)) != ncol(data)-1) {
-  print(length(items))
-  print(length(symptoms))
-  print(length(diagnoses))
-  print(ncol(data))
-}
+# Making sure no variables are missing
+check_vars_included(data, items, symptoms, diagnoses)
+
+# TODO: PROBLEM = what to do when no observed cases? (e.g. KSADS_Child17_S243)
+# Dropping them for now 
 
 # ==============================================================================
 # ~ CART (Classification and Regression Trees) ~
@@ -136,46 +209,41 @@ if ((length(items) + length(symptoms) + length(diagnoses)) != ncol(data)-1) {
 
 # https://mdsr-book.github.io/mdsr3e/11-learningI.html
 
-get_rules <- function(outcome, predictors, data){
+
+symptoms_preds <- lapply(symptoms, function(s) {
+  get_rules(outcome = s, predictors = items, data = data)
+})
+
+
+# ~ Inspect predictions ~ 
+# check_preds <- data
+
+for (s in symptoms_preds) {
+  
+  outcome <- s$outcome
   
   message(outcome)
   
-  # if (is.factor(data[, outcome]) && nlevels(data[, outcome]) > 10) {
-  #   cat(' ! too many levels, skipping.')
-  #   empty_df <- 
-  #   return(NULL)
-  # }
+  # check_preds[!is.na(data[, outcome]), outcome] <- predict(s$fit, newdata = data)
+  if (s$predictors == '') {
+    next
+  }
   
-  data_subset <- cbind(data[predictors], data[, outcome])
+  pred <- predict(s$fit, newdata = data, 
+                  type = if (s$method == "class") "class" else "vector")
   
-  fit <- rpart::rpart(as.formula(paste(outcome, '~ .')), data = data_subset)
-    # method = "class", # let him guess
-    # control = rpart.control(cp = 0.01, minbucket = 20)) 
-    # TODO: Tune cp, maxdepth, minbucket to balance fidelity vs simplicity
+  print(table(cbind(pred, data[, outcome]), useNA = 'ifany'))
   
-  rules <- rpart.plot::rpart.rules(fit, cover = TRUE, nn = TRUE, facsep=" // ")
-  names(rules) <- c('outcome', 'outcome_value', 'when', 
-                    'predictor', 'op', 'predictor_value', 'cover')
-  rules$outcome <- outcome
-  
-  rules$outcome_label <- attr(data_subset[,outcome], 'label')
-  rules$predictor_label <- vapply(rules$predictor, 
-                                  function(p) attr(data_subset[, p], 'label'), 
-                                  character(1))
-  
-  rules$tot_cover <- sum(as.numeric(gsub('%','', rules$cover)))
-  
-  return(rules)
+  cat('\n\n')
 }
 
-symptoms_rules <- do.call(rbind, lapply(symptoms, function(s) {
-  #TODO: TMP!! ensure only actual factors are factors!
-  
-  get_rules(outcome=s, predictors=items, data=data)
-}))
+# ~ Inspect rules ~ 
+symptoms_rules <- do.call(rbind, lapply(symptoms_preds, `[[`, "rules"))
 
-outcome = symptoms[3]
-r = get_rules(outcome=s, predictors=items, data=data)
+# in the castor take a row and check if you never saw this before 
+# flag items that are completely missing for the paper and pencil 
+
+
 # ==============================================================================
 # regularized GLMs (LASSO)
 # ==============================================================================
