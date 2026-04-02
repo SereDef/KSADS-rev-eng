@@ -1,0 +1,66 @@
+---
+title: "KSADS report"
+author: "Serena Defina"
+format: html
+---
+
+## The Instrument structure
+
+
+```{r}
+#| echo: false
+#| output: asis
+
+module_summaries <- readRDS("module_summaries.rds")
+
+make_item_callouts <- function(item_list) {
+  if (is.null(item_list) || length(item_list) == 0) return("")
+
+  blocks <- lapply(item_list, function(it) {
+    # Print in red if there is mismatch between them
+    callout_type <- switch(it$flag, 
+                           no = 'tip', 
+                           yes = 'important',
+                           maybe = 'warning')
+    
+    # Ensure no empty labels (they mess up the titles)
+    label <- if (is.na(it$label) || nchar(it$label) < 2) "*[No label]*" else trimws(it$label)
+
+    tab_lines <- knitr::kable(it$compr, format = "markdown")
+    
+    paste0(
+      '::: {.callout-', callout_type,
+      ' collapse="true" title="', label, ' (**', it$name, '**)"}\n\n',
+      paste(tab_lines, collapse = "\n"),
+      '\n\n:::\n\n'
+    )
+  })
+
+  paste0(blocks, collapse = "")
+}
+
+for (mod in names(module_summaries)) {
+  ms <- module_summaries[[mod]]
+
+  cat('::: {.callout-note collapse="true" title="', mod, '"}\n\n', sep = "")
+  cat(ms$n_items, "items.\n\n")
+  cat("::: {.panel-tabset}\n\n")
+
+  if (ms$n_screener == 0 && ms$n_supplement == 0) {
+    cat("### Intro items\n\n")
+    cat(make_item_callouts(ms$other))
+  
+  }
+  if (ms$n_screener > 0) {
+    cat("### Screeners (", ms$n_screener, " items)\n\n", sep = "")
+    cat(make_item_callouts(ms$screener))
+  }
+  if (ms$n_supplement > 0) {
+    cat("### Supplements (", ms$n_supplement, " items)\n\n", sep = "")
+    cat(make_item_callouts(ms$supplement))
+  }
+
+  cat(":::\n\n")
+  cat(":::\n\n")
+}
+```

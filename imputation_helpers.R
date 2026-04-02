@@ -1,3 +1,95 @@
+summarise_item <- function(x) {
+  
+  if (inherits(x, "Date")) {
+    n = sum(!is.na(x))
+    n_na = sum(is.na(x))
+    
+    if (n == 0) {
+      list(
+        n = 0L,
+        n_na = n_na,
+        min = as.Date(NA),
+        max = as.Date(NA))
+      
+    } else {
+      list(
+        'n (observed)' = n,
+        'NA' = n_na,
+        min = as.character(as.Date(min(x, na.rm = TRUE))),
+        max = as.character(as.Date(max(x, na.rm = TRUE))))
+    }
+    
+  } else if (is.factor(x)) {
+
+    tab <- table(x, useNA = "always")
+    
+    levels <- names(tab)
+    levels[is.na(levels)] <- 'NA'
+    
+    list(
+      n = sum(!is.na(x)),
+      levels = levels,
+      counts = as.integer(tab)
+    )
+    
+  } else if (is.numeric(x)) {
+    
+    n = sum(!is.na(x))
+    n_na = sum(is.na(x))
+    
+    list(
+        'n (observed)' = n,
+        'NA' = n_na,
+        mean = round(mean(x, na.rm = TRUE), 2),
+        median = stats::median(x, na.rm = TRUE),
+        min = ifelse(n == 0, NA, min(x, na.rm = TRUE)),
+        max = ifelse(n == 0, NA, max(x, na.rm = TRUE)))
+    
+  } else {
+    stop('Expected a Date, factor or numeric.')
+  }
+}
+
+summarise_item_table <- function(x_comp, x_cast) {
+  s1 <- summarise_item(x_comp)
+  s2 <- summarise_item(x_cast)
+  
+  if ('levels' %in% names(s1)) { # infer factor
+    
+    all_levels <- union(s1$levels, s2$levels)
+    
+    comp_counts  <- setNames(s1$counts, s1$levels)
+    cast_counts  <- setNames(s2$counts, s2$levels)
+    
+    tab <- data.frame(
+      COMP   = c(s1$n, as.integer(comp_counts[all_levels])),
+      Castor = c(s2$n, as.integer(cast_counts[all_levels])))
+    
+    rownames(tab) <- c("n (observed)", all_levels)
+    
+  } else {
+    tab <- cbind(s1, s2)
+    colnames(tab) <- c('COMP','Castor')
+  }
+  
+  tab
+}
+
+compare_uniques <- function(x_comp, x_cast) {
+  
+  u_comp <- sort(unique(x_comp))
+  u_cast <- sort(unique(x_cast))
+  
+  problem <- !identical(u_comp, u_cast)
+  
+  if ((is.numeric(x_comp) || inherits(x_comp, "Date")) & problem){
+    flag <- 'maybe'
+  } else if (problem) { flag <- 'yes'
+  } else { flag <- 'no' }
+  
+  flag
+}
+
 check_vars_included <- function(data, items, symptoms, diagnoses) {
   
   if ((length(items) + length(symptoms) + length(diagnoses)) != ncol(data)-1) {
