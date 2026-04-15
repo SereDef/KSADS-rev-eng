@@ -1,7 +1,9 @@
 ---
 title: "KSADS report"
 author: "Serena Defina"
-format: html
+format:
+  html:
+    embed-resources: true
 ---
 
 ## The Instrument structure
@@ -43,7 +45,7 @@ for (mod in names(module_summaries)) {
   ms <- module_summaries[[mod]]
 
   cat('::: {.callout-note collapse="true" title="', mod, '"}\n\n', sep = "")
-  cat(ms$n_items, "items.\n\n")
+  cat(ms$n_items, "items,\t", ms$n_symptoms, "symptoms, and\t", ms$n_diagnoses,"diagnoses\n\n")
   cat("::: {.panel-tabset}\n\n")
 
   if (ms$n_screener == 0 && ms$n_supplement == 0) {
@@ -58,6 +60,18 @@ for (mod in names(module_summaries)) {
   if (ms$n_supplement > 0) {
     cat("### Supplements (", ms$n_supplement, " items)\n\n", sep = "")
     cat(make_item_callouts(ms$supplement))
+  }
+  if (ms$n_symptoms > 0) {
+    cat("### Symptoms (", ms$n_symptoms, " items)\n\n", sep = "")
+    cat(make_item_callouts(ms$symptoms))
+  }
+  if (ms$n_diagnoses > 0) {
+    cat("### Diagnoses (", ms$n_diagnoses, " items)\n\n", sep = "")
+    cat(make_item_callouts(ms$diagnoses))
+  }
+  if (ms$n_aggr_diagnoses > 0) {
+    cat("### Aggregate diagnoses (", ms$n_aggr_diagnoses, " items)\n\n", sep = "")
+    cat(make_item_callouts(ms$aggr_diagnoses))
   }
 
   cat(":::\n\n")

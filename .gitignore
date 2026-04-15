@@ -2,3 +2,7 @@
 .Rhistory
 .RData
 .Ruserdata
+
+KSADS_report.html
+module_summaries.rds
+KSADS_report_files/

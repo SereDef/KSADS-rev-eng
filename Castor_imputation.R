@@ -2,6 +2,10 @@
 #                       --- CASTOR data imputation ---
 # ==============================================================================
 
+# NOTES:
+# * All NAs in COMP are now interpreted as 'meaningful' (not as missing values)
+#  If the screener is NA (did not do the screener) a module is missing, skip it 
+
 # ~ Set up ~ -------------------------------------------------------------------
 
 # devtools::install_github('SereDef/GenR.helpR')
@@ -18,13 +22,22 @@ data_dir <- '\\\\store/department/genr/isi-store/Behaviour_and_Cognition/Focus_o
 
 # list.files(data_dir)
 
-data_filename <- 'final_dataset_KSADS_F17_cleaned_23022026noSUD.sav'
+# data_filename <- 'final_dataset_KSADS_F17_cleaned_23022026noSUD.sav'
+data_filename <- 'final_dataset_KSADS_F17_cleaned_03042026noSUD.sav'
 
 # ~ Read ~ ---------------------------------------------------------------------
 
 data <- file.path(data_dir, data_filename) |> 
   haven::read_sav() |>
   haven::as_factor(only_labelled = TRUE)
+
+# Completed the computer version
+COMP <- data |>
+  dplyr::filter(KSADS_Child17_Datasource_cleaned == 'COMP')
+
+Castor <- data |>
+  dplyr::filter(KSADS_Child17_Datasource_cleaned == 'Castor')
+
 
 # ~ Explore & clean ~ ----------------------------------------------------------
 
@@ -40,14 +53,7 @@ general_vars <- c('Rnummer_corrected',
 data_overview(data[general_vars])
 summary(data[general_vars])
 
-# Completed the computer version
-COMP <- data |>
-  dplyr::filter(KSADS_Child17_Datasource_cleaned == 'COMP')
-
-Castor <- data |>
-  dplyr::filter(KSADS_Child17_Datasource_cleaned == 'Castor')
-
-
+# ------------------------------------------------------------------------------ 
 # 2. Raw item scores (for all participants), can be recognized by numeric item IDcode; 
 # i.e. var name format such as KSADS_Child17_0.0.0.Q3_cleaned. 
 #	- The first number: whether the item was part of the screener (1) or supplement (2)
@@ -59,17 +65,62 @@ Castor <- data |>
 
 raw_items  <- grep('^KSADS_Child17_[0-9]+', names(data), value=TRUE)
 
-item_map <- gsub('KSADS_Child17_|_cleaned', '', raw_items) |> # remove useless parts
-  strsplit('\\.') |> # separate elements
-  (\(parts) {
-    # TODO: TMP some sub-questions have different formats, pad to ensure same length
-    parts <- lapply(parts, \(p) { length(p) <- 4; p })
-    do.call(rbind, parts)
-  })() |>
-  as.data.frame() |>
-  setNames(c('screener','module','question','sub')) 
+# 3. Symptom variables (COMP participants only). Computed by KSADS-COMP algorithm, 
+#    thus far unaltered us. Can be recognized by letter S in variable name.
+#     * Note, we recently found out that sometimes, these variables include odd categories with n=1.
+#       As discussed before, in such cases you can collapse all non-0 levels into 1 (so that we have 
+#       two levels only: 0=No and 1=Yes).
 
-rownames(item_map) <- raw_items
+symptoms <- grep('^KSADS_Child17_S[0-9]', names(data), value=TRUE)
+
+# 4. Diagnosis variables (COMP participants only). 
+#     * Computed by KSADS-COMP algorithm, thus far unaltered by us. 
+#       Can be recognized by letter D in variable name. E.g. KSADS_Child17_D1
+#     * Aggregate diagnosis variables. Made by us by collapsing a few diagnosis 
+#       variables into one category. Var names include disorder class description 
+#       (e.g. KSADS_Child17_Depressive_disorders_1)
+
+diagnoses <- grep('^KSADS_Child17_D[0-9]', names(data), value=TRUE)
+
+aggr_diagnoses <- setdiff(names(data), c(general_vars, raw_items, symptoms, diagnoses))
+
+cli::cli_bullets(c('*' = '{.val {length(general_vars)}} general variables',
+                   '*' = '{.val {length(raw_items)}} raw items',
+                   '*' = '{.val {length(symptoms)}} symptoms',
+                   '*' = '{.val {length(diagnoses)}} diagnoses',
+                   '*' = '{.val {length(aggr_diagnoses)}} aggregate diagnoses',
+                   '>' = 'total = {.val {length(c(general_vars, raw_items, symptoms, 
+                          diagnoses, aggr_diagnoses))}} / {ncol(data)}'))
+
+data_labels <- data_overview(data)
+
+# --- some raw items were only administered to the Castor people! --------------
+
+# Find raw items that were only used in Castor
+# castor_only_items <- names(which(colSums(is.na(COMP[, raw_items])) == nrow(COMP)))
+# Correction: actually some of regular items happen to be all NA in COMP (suicidality method)
+# So define them manually: 
+castor_only_items <- c("KSADS_Child17_2.1.13.q4_cleaned", 
+                       "KSADS_Child17_2.1.7.Q4_cleaned",
+                       "KSADS_Child17_2.2.13.q2b_cleaned", 
+                       "KSADS_Child17_2.2.14.q2b_cleaned", 
+                       "KSADS_Child17_2.4.19_cleaned")
+
+# summary(COMP[castor_only_items])
+# data_overview(Castor[castor_only_items])
+summary(Castor[castor_only_items])
+
+cli::cli_alert_info(c('{.val {length(castor_only_items)}} / {length(raw_items)} items',
+                      ' were administerd only in the Castor set, dropping them.'))
+
+raw_items_clean <- setdiff(raw_items, castor_only_items)
+
+# --- Todo: handle raw items that were recoded manually! -----------------------
+
+# TODO: duplicates!
+# View(data[data$Rnummer_corrected %in% data$Rnummer_corrected[which(duplicated(data$Rnummer_corrected))],])
+
+# Map modules ------------------------------------------------------------------
 
 module_map <- c(
   '0'  = 'Introduction',
@@ -85,192 +136,205 @@ module_map <- c(
   '19' = 'AUD'
 )
 
+item_map <- gsub('KSADS_Child17_|_cleaned', '', raw_items) |> # remove useless parts
+  strsplit('\\.') |> # separate elements
+  (\(parts) {
+    # TODO: TMP some sub-questions have different formats, pad to ensure same length
+    parts <- lapply(parts, \(p) { length(p) <- 4; p })
+    do.call(rbind, parts)
+  })() |>
+  as.data.frame() |>
+  setNames(c('screener','module','question','sub')) 
+
+rownames(item_map) <- raw_items
+
 item_map$module_name <- unname(module_map[ item_map$module ])
 
-do <- data_overview(data[raw_items])
+# table(item_map$screener)
 
-item_map$item_label <- do$label
-item_map$item_class <- do$class
+# We will identify symptoms and diagnoses belonging to that module by using their
+# position in the dataset (they come after each set of raw items)
+item_map$pos <- match(rownames(item_map), names(data))
 
-table(item_map$screener)
+module_intervals <- item_map |>
+  # Note: we need to exclude the Castor only items here because they are placed 
+  # (sometimes?) at the end of datasets and therefore break the max(pos) logic
+  dplyr::filter(rownames(item_map) %in% raw_items_clean) |> 
+  dplyr::group_by(module) |>
+  dplyr::summarise(
+    module_name = dplyr::first(module_name),
+    # position of first raw item in this module
+    start_items = min(pos),  
+    # position of last  raw item in this module
+    end_items   = max(pos),   
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(start_items) |>
+  dplyr::mutate(
+    # position interval for this module symptoms and diagnoses
+    end_module = dplyr::lead(start_items, 
+                             # Disregard last 4 items that are castor only
+                             default = ncol(data) - 3L) - 1L
+  )
 
-inspect_items <- function(module) {
+
+inspect_module <- function(module) {
   
   module_set <- item_map[item_map$module_name == module, ]
   
   tot_items <- nrow(module_set)
   
-  intro_items <- rownames(module_set)[module_set$screener == 0]
-  screener_items <- rownames(module_set)[module_set$screener == 1]
-  supplmnt_items <- rownames(module_set)[module_set$screener == 2]
+  intro_items  <- rownames(module_set)[module_set$screener == 0]
+  screen_items <- rownames(module_set)[module_set$screener == 1]
+  suppl_items  <- rownames(module_set)[module_set$screener == 2]
   
-  get_summaries <- function(item_list){
+  # Fetch this module's position interval from module_intervals
+  module_pos   <- module_intervals[module_intervals$module_name == module, ]
+  start_module <- module_pos$end_items
+  end_module   <- module_pos$end_module
+  
+  # Helper: pick only variables from inside the module interval
+  in_interval <- function(vars) {
+    pos <- match(vars, names(data))
+    vars[!is.na(pos) & pos >= start_module & pos <= end_module]
+  }
+  
+  module_symptoms  <- in_interval(symptoms)
+  module_diagnoses <- in_interval(diagnoses)
+  module_aggr_diangoses <- in_interval(aggr_diagnoses)
+  
+  get_summaries <- function(var_list){
     
-    if (length(item_list) < 1) return(NULL)
+    if (length(var_list) < 1) return(NULL)
     
-    sapply(item_list, \(item) list(
-      name = item, # use names instead
-      label = module_set[item, "item_label"],
-      compr = summarise_item_table(COMP[[item]], Castor[[item]]),
-      flag = compare_uniques(COMP[[item]], Castor[[item]])
+    sapply(var_list, \(x) list(
+      name = x, # use names instead
+      label = data_labels[data_labels$name == x, 'label'],
+      compr = summarise_item_table(COMP[[x]], Castor[[x]]),
+      flag = compare_uniques(COMP[[x]], Castor[[x]]) # Or other flag??
     ), simplify = FALSE, USE.NAMES = TRUE)
   }
   
   
   list(
     # module  = module, use names instead
-    n_items = nrow(module_set),
-    n_screener = length(screener_items),
-    n_supplement = length(supplmnt_items),
-    screener = get_summaries(screener_items),
-    supplement = get_summaries(supplmnt_items),
-    other = get_summaries(intro_items)
+    n_items      = nrow(module_set),
+    n_screener   = length(screen_items),
+    n_supplement = length(suppl_items),
+    n_symptoms   = length(module_symptoms),
+    n_diagnoses  = length(module_diagnoses),
+    n_aggr_diagnoses = length(module_aggr_diangoses),
+    screener   = get_summaries(screen_items),
+    supplement = get_summaries(suppl_items),
+    other      = get_summaries(intro_items),
+    symptoms   = get_summaries(module_symptoms),
+    diagnoses  = get_summaries(module_diagnoses),
+    aggr_diagnoses = get_summaries(module_aggr_diangoses)
   )
 
 }
 
 
-module_summaries <- sapply(unname(module_map), inspect_items, 
+module_summaries <- sapply(unname(module_map), inspect_module, 
                            simplify = FALSE, USE.NAMES = TRUE)
 
 saveRDS(module_summaries, 'module_summaries.rds')
-# Visualise in quarto doc 
+# Visualise in quarto doc
 
-
-# 
-# item_response_pattern <- function(module, data = comput) {
-#   module_set <- item_map[item_map$module_name == module, ]
-#   
-#   module_items <- rownames(module_set)
-#   
-#   module_screeners <- rownames(module_set[module_set$screener == 1,])
-#   
-#   # Fetch module data
-#   item_resp <- data |> select(all_of(module_items))
-#   
-#   # Turn each row's full answer vector into a pattern key
-#   reps_pattern <- item_resp |>
-#     # TMP: Assume no meaningful NA
-#     mutate(across(everything(), ~ ifelse(is.na(.x), "", as.character(.x)))) |>
-#     tidyr::unite("pattern", everything(), sep = "_") |> # paste 
-#     count(pattern, name = "Freq") |>
-#     arrange(desc(Freq))
-#   
-#   # all observed combinations (patterns) with counts
-#   print(reps_pattern, n=10)
-#   
-#   pat_long <-
-#     reps_pattern |>
-#     tidyr::separate(
-#       pattern,
-#       into   = module_items,
-#       sep    = "_",
-#       remove = FALSE   # <- keep original 'pattern' column
-#     ) |>
-#     tidyr::pivot_longer(
-#       cols      = all_of(module_items),
-#       names_to  = "item",
-#       values_to = "value"
-#     )
-#   
-#   ggplot(pat_long, aes(x = item, y = pattern, fill = value)) +
-#     geom_tile(color = "grey80") +
-#     theme_minimal()
-# }
-# 
-# item_response_pattern("Depressive disorders") 
-# 
-
-# if screener is missing that is an accident 
-
-
-# 3. Symptom variables (COMP participants only). Computed by KSADS-COMP algorithm, 
-#    thus far unaltered us. Can be recognized by letter S in variable name.
-#     * Note, we recently found out that sometimes, these variables include odd categories with n=1.
-#       As discussed before, in such cases you can collapse all non-0 levels into 1 (so that we have 
-#       two levels only: 0=No and 1=Yes).
-
-symptoms <- grep('^KSADS_Child17_S[0-9]', names(data), value=TRUE) #TODO: missing??
-
-
-# 4. Diagnosis variables (COMP participants only). 
-#     * Computed by KSADS-COMP algorithm, thus far unaltered by us. 
-#       Can be recognized by letter D in variable name. E.g. KSADS_Child17_D1
-#     * Aggregate diagnosis variables. Made by us by collapsing a few diagnosis 
-#       variables into one category. Var names include disorder class description 
-#       (e.g. KSADS_Child17_Depressive_disorders_1)
-
-diagnoses <- grep('^KSADS_Child17_D[0-9]', names(data), value=TRUE)
-
-aggr_diagnoses <- setdiff(names(data), c(general_vars, raw_items, symptoms, diagnoses))
-
-
-# Completed the computer version
-comput <- data |>
-  dplyr::filter(KSADS_Child17_Datasource_cleaned == 1)
-
-# TODO: for some of these the raw items do not correspond to 
-# the symptoms (the raw score was corrected, the symptom should be recalculated)
-
-# Paper-and-pencil / Castor -> must be imputed 
-castor <- data |>
-  dplyr::filter(KSADS_Child17_Datasource_cleaned == 2)
-# Read data (one module at the time)
-# module <- 'ED'
-
-# TODO: make sure module names are consistent
-
-# comput <- file.path(data_dir, 
-#                     paste0('Merge_items_diagnoses_COMP_', module, ' module.sav')) |> 
-#   haven::read_sav()
-# 
-# castor <- file.path(data_dir,
-#                     paste0('Castor_dataset_only_cleaned_', module, ' module.sav')) |>
-#   haven::read_sav()
+# Helper: fetching the items / symptoms / diagnoses etc. from a module 
+get <- function(module, group) {
   
+  if (group == 'items') {
 
-# names(castor)
-# names(comput)
+    s0 <- module_summaries[[module]][['screener']] |> names()
+    s1 <- module_summaries[[module]][['supplement']] |> names()
+    
+    out <- c(s0, s1)
+    
+  } else {
+    out <- module_summaries[[module]][[group]] |> names()
+  }
+  
+  setdiff(out, castor_only_items) # always remove the castor only ones?
+}
 
-# Variable overlap:
-# - in castor not in computerized version 
-# setdiff(names(castor), names(comput))
-# - in computerized version not in castor
-# setdiff(names(comput), names(castor))
+# === ITEM RESPONSE PATTERNS====================================================
 
-# TODO: make sure the IDs 
-# - have the same name in both datasets 
-# - have no duplicates 
-# - Are either numeric or character vectors (no SPSS bs)
-# - (optional) there is no overlap in people between datasets
+item_response_patterns <- function(module) {
+  
+  mi <- get(module, 'items')
+  
+  # Exclude date items
+  is_date_or_numeric <- sapply(mi, \(item) {
+    grepl("month|date|year", item, ignore.case = TRUE) ||
+      is.numeric(data[[item]])
+  })
+  # print to inspect...?
+  
+  mi_facts <- mi[!is_date_or_numeric]
+  
+  # TMP: Exclude problematic Depression item
+  # mi <- mi[!grepl('2.1.22.Q2', mi)]
+  
+  if (length(mi_facts) == 0) return(NULL)
+  
+  # Helper: compute pattern frequencies for one dataset
+  make_patterns <- function(df, id_col = NULL) {
+    df[mi_facts] |>
+      # NOTE: Assume no meaningful NA
+      mutate(across(everything(), \(x) ifelse(is.na(x), "_", as.character(x)))) |>
+      tidyr::unite("pattern", everything(), sep = "|") |> # paste
+      count(pattern, name = "n") |>
+      arrange(desc(n))
+  }
+  
+  pat_comp  <- make_patterns(COMP)
+  pat_cast  <- make_patterns(Castor)
+  
+  # inspect most popular pattern
+  # rbind(pat_comp[1,], pat_cast[1, ])
+  # identical(pat_comp$pattern[1], pat_cast$pattern[1])
+  
+  d1 <- setdiff(pat_comp$pattern, pat_cast$pattern) # in comp not in cast
+  d2 <- setdiff(pat_cast$pattern, pat_comp$pattern) # in cast not in comp
+  
+  # Report
+  cli::cli_rule(module)
+  cli::cli_text('{.strong {length(mi_facts)}} / {length(mi)} items considered.\n\n')
+  
+  cli::cli_bullets(c(
+    '*' = '{.val {nrow(pat_comp)}} unique patterns in COMP (n = {nrow(COMP)})
+           {cli::symbol$arrow_right} {cli::col_yellow(cli::symbol$warning)} {length(d1)} patterns in COMP are not in Castor',
+    '*' = '{.val {nrow(pat_cast)}} unique patterns in Castor (n = {nrow(Castor)})
+           {cli::symbol$arrow_right} {cli::col_red(cli::symbol$cross)} {length(d2)} patterns in Castor are not in COMP'
+  ))
+  
+  cli::cli_text('\n\n{.strong Most popular pattern:}')
+  # cat(pat_comp$pattern[1], "\n\n")
+  # cat(pat_cast$pattern[1], "\n\n")
+  
+  withr::with_options(list(cli.width = Inf), {
+    cli::cli_text(pat_comp$pattern[1])
+    cli::cli_text(pat_cast$pattern[1])
+  })
+  
+  cli::cli_text()
+  
+  invisible(NULL)
+}
 
-# More than one id variable
-# nrow(castor[castor$participant_id != castor$R_number_participant_1, ])
-# castor$R_number_participant_1 <- NULL # remove extra id
- 
-# Duplicate IDs
-# sum(duplicated(castor$participant_id))
-# Remove one duplicate
-# dup_id <- castor$participant_id[duplicated(castor$participant_id)]
+n <- lapply(unname(module_map), item_response_patterns)
 
-# View(castor[castor$participant_id == dup_id, ])
-# castor <- castor[!duplicated(castor$participant_id), ]
+# === PREDICTION VALIDATION ====================================================
 
-# View(castor[castor$participant_id == dup_id, ])
+module <- 'Bipolar disorders'
 
-# summary(castor)
+mi <- get(module, 'items')
+ms <- get(module, 'symptoms')
+md <- get(module, 'diagnoses')
 
-comput$participant_id <- as.character(comput$KSADS_Child17_ID_cleaned)
 
-# TODO: 'Extra' variables (e.g. date interview) remove for now..?
 
-comput$KSADS_Child17_ID_cleaned <- NULL
-comput$KSADS_Child17_DateofInterview_year_cleaned <- NULL
-comput$KSADS_Child17_DateofInterview_month_cleaned <- NULL
-
-# summary(comput)
-
-# TODO: All NAs are now interpreted as 'meaningful'
 # all 1.soemthig are NA: did not do the screener
 screener_items <- grep('^KSADS_Child17_1.', names(comput), value = TRUE)
 did_not_complete_screener <- rowSums(is.na(comput[,screener_items])) == length(screener_items)

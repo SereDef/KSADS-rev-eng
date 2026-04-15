@@ -80,12 +80,27 @@ compare_uniques <- function(x_comp, x_cast) {
   u_comp <- sort(unique(x_comp))
   u_cast <- sort(unique(x_cast))
   
-  problem <- !identical(u_comp, u_cast)
   
-  if ((is.numeric(x_comp) || inherits(x_comp, "Date")) & problem){
-    flag <- 'maybe'
-  } else if (problem) { flag <- 'yes'
-  } else { flag <- 'no' }
+  # levels observed in Castor but not COMP → problem
+  extra_in_cast <- setdiff(u_cast, u_comp)  
+  # in COMP but not Castor → less critical
+  extra_in_comp <- setdiff(u_comp, u_cast)  
+  
+  if (length(extra_in_cast) > 0) {
+    flag <- 'yes'      # Castor has levels COMP never saw → needs attention
+  } else if (length(extra_in_comp) > 0) {
+    flag <- 'maybe'    # COMP has levels Castor never saw → less critical
+  } else {
+    flag <- 'no'
+  }
+  
+  # Old version: There
+  # problem <- !identical(u_comp, u_cast)
+  # 
+  # if ((is.numeric(x_comp) || inherits(x_comp, "Date")) & problem){
+  #   flag <- 'maybe'
+  # } else if (problem) { flag <- 'yes'
+  # } else { flag <- 'no' }
   
   flag
 }
